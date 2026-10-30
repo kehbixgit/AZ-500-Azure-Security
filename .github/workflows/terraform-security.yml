@@ -1,0 +1,32 @@
+name: Terraform security scan
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: Directory containing Terraform configuration
+        required: false
+        type: string
+        default: "."
+      soft_fail:
+        description: Report findings without failing the workflow
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  checkov:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan Terraform with Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: ${{ inputs.working_directory }}
+          framework: terraform
+          soft_fail: ${{ inputs.soft_fail }}
+          quiet: true
