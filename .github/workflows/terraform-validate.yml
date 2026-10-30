@@ -1,0 +1,35 @@
+name: Terraform validate
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: Directory containing Terraform configuration
+        required: false
+        type: string
+        default: "."
+      terraform_version:
+        required: false
+        type: string
+        default: "1.9.8"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+      - name: Terraform format
+        run: terraform fmt -check -recursive
+      - name: Terraform initialize
+        run: terraform init -backend=false -input=false
+      - name: Terraform validate
+        run: terraform validate -no-color
