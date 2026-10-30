@@ -1,0 +1,66 @@
+name: Terraform plan
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        required: false
+        type: string
+        default: "."
+      terraform_version:
+        required: false
+        type: string
+        default: "1.9.8"
+      var_file:
+        description: Optional Terraform variables file path relative to working_directory
+        required: false
+        type: string
+        default: ""
+      backend:
+        description: Initialize configured remote backend when true
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+      - name: Terraform initialize
+        shell: bash
+        env:
+          USE_BACKEND: ${{ inputs.backend }}
+        run: |
+          set -euo pipefail
+          if [[ "$USE_BACKEND" == "true" ]]; then
+            terraform init -input=false
+          else
+            terraform init -backend=false -input=false
+          fi
+      - name: Terraform plan
+        shell: bash
+        env:
+          VAR_FILE: ${{ inputs.var_file }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$VAR_FILE" ]]; then
+            terraform plan -input=false -no-color -var-file="$VAR_FILE" -out=tfplan
+          else
+            terraform plan -input=false -no-color -out=tfplan
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: ${{ inputs.working_directory }}/tfplan
+          if-no-files-found: error
+          retention-days: 5
