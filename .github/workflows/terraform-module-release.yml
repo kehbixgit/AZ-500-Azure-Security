@@ -1,0 +1,130 @@
+name: Terraform module release to Nexus
+
+on:
+  workflow_call:
+    inputs:
+      module_name:
+        description: Terraform module artifact name
+        required: true
+        type: string
+      version:
+        description: Release version without the v prefix; leave empty to derive it from the tag
+        required: false
+        type: string
+        default: ""
+      terraform_version:
+        description: Terraform CLI version
+        required: false
+        type: string
+        default: "1.9.8"
+      working_directory:
+        description: Directory containing the Terraform module
+        required: false
+        type: string
+        default: "."
+      nexus_repository:
+        description: Nexus Raw repository name
+        required: true
+        type: string
+    secrets:
+      NEXUS_URL:
+        required: true
+      NEXUS_USERNAME:
+        required: true
+      NEXUS_PASSWORD:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: [self-hosted, linux, nexus-local]
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+
+      - name: Resolve and validate release version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$INPUT_VERSION" ]]; then
+            VERSION="$INPUT_VERSION"
+          elif [[ "$REF_TYPE" == "tag" ]]; then
+            VERSION="${REF_NAME#v}"
+          else
+            echo "Provide version input when running manually without a version tag." >&2
+            exit 1
+          fi
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid version: $VERSION" >&2
+            exit 1
+          fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+      - name: Terraform formatting
+        run: terraform fmt -check -recursive
+
+      - name: Terraform initialization
+        run: terraform init -backend=false -input=false
+
+      - name: Terraform validation
+        run: terraform validate
+
+      - name: Build module archive
+        id: package
+        shell: bash
+        env:
+          MODULE_NAME: ${{ inputs.module_name }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          ARCHIVE="${MODULE_NAME}-${VERSION}.zip"
+          zip -j "$ARCHIVE" main.tf variables.tf outputs.tf README.md
+          sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+
+      - name: Publish archive and checksum to Nexus
+        shell: bash
+        env:
+          NEXUS_URL: ${{ secrets.NEXUS_URL }}
+          NEXUS_REPOSITORY: ${{ inputs.nexus_repository }}
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          MODULE_NAME: ${{ inputs.module_name }}
+          VERSION: ${{ steps.version.outputs.value }}
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: |
+          set -euo pipefail
+          : "${NEXUS_URL:?Missing NEXUS_URL secret}"
+          : "${NEXUS_REPOSITORY:?Missing nexus_repository input}"
+          : "${NEXUS_USERNAME:?Missing NEXUS_USERNAME secret}"
+          : "${NEXUS_PASSWORD:?Missing NEXUS_PASSWORD secret}"
+
+          BASE="${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/${MODULE_NAME}/${VERSION}"
+          for FILE in "$ARCHIVE" "$ARCHIVE.sha256"; do
+            STATUS=$(curl --silent --output /dev/null --write-out "%{http_code}" \
+              --user "$NEXUS_USERNAME:$NEXUS_PASSWORD" "$BASE/$FILE" || true)
+            if [[ "$STATUS" == "200" ]]; then
+              echo "Refusing to overwrite existing release: $FILE" >&2
+              exit 1
+            fi
+          done
+
+          curl --fail --show-error --user "$NEXUS_USERNAME:$NEXUS_PASSWORD" \
+            --upload-file "$ARCHIVE" "$BASE/$ARCHIVE"
+          curl --fail --show-error --user "$NEXUS_USERNAME:$NEXUS_PASSWORD" \
+            --upload-file "$ARCHIVE.sha256" "$BASE/$ARCHIVE.sha256"
