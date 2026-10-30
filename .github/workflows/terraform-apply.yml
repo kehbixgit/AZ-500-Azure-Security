@@ -1,0 +1,51 @@
+name: Terraform apply
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        required: false
+        type: string
+        default: "."
+      terraform_version:
+        required: false
+        type: string
+        default: "1.9.8"
+      var_file:
+        required: false
+        type: string
+        default: ""
+      environment:
+        description: GitHub Environment used for approval gates and environment secrets
+        required: false
+        type: string
+        default: "production"
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+      - name: Terraform initialize
+        run: terraform init -input=false
+      - name: Terraform apply
+        shell: bash
+        env:
+          VAR_FILE: ${{ inputs.var_file }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$VAR_FILE" ]]; then
+            terraform apply -input=false -auto-approve -var-file="$VAR_FILE"
+          else
+            terraform apply -input=false -auto-approve
+          fi
